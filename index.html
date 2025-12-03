@@ -2,13 +2,143 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>OpenSockit FPS Demo</title>
+  <title>Multiplayer FPS Arena</title>
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { 
+      margin: 0; 
+      overflow: hidden; 
+      font-family: 'Arial', sans-serif;
+    }
     canvas { display: block; }
+    
+    #hud {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: white;
+      font-size: 18px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+    
+    #health-bar {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 300px;
+      height: 30px;
+      background: rgba(0,0,0,0.5);
+      border: 2px solid white;
+      border-radius: 15px;
+      overflow: hidden;
+    }
+    
+    #health-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #ff0000, #00ff00);
+      transition: width 0.3s;
+      width: 100%;
+    }
+    
+    #crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 20px;
+      height: 20px;
+      pointer-events: none;
+    }
+    
+    #crosshair::before,
+    #crosshair::after {
+      content: '';
+      position: absolute;
+      background: white;
+    }
+    
+    #crosshair::before {
+      width: 2px;
+      height: 20px;
+      left: 9px;
+    }
+    
+    #crosshair::after {
+      width: 20px;
+      height: 2px;
+      top: 9px;
+    }
+    
+    #kill-feed {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: white;
+      font-size: 14px;
+      text-align: right;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      max-width: 300px;
+    }
+    
+    .kill-msg {
+      margin: 5px 0;
+      opacity: 1;
+      animation: fadeOut 5s forwards;
+    }
+    
+    @keyframes fadeOut {
+      0%, 70% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    
+    #scoreboard {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      padding: 20px;
+      border-radius: 10px;
+      color: white;
+      display: none;
+    }
+    
+    #ammo-counter {
+      position: absolute;
+      bottom: 30px;
+      right: 30px;
+      color: white;
+      font-size: 24px;
+      font-weight: bold;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+    }
   </style>
 </head>
 <body>
+<div id="hud">
+  <div>Health: <span id="health-text">100</span></div>
+  <div>Kills: <span id="kills">0</span></div>
+  <div>Deaths: <span id="deaths">0</span></div>
+</div>
+
+<div id="health-bar">
+  <div id="health-fill"></div>
+</div>
+
+<div id="crosshair"></div>
+
+<div id="kill-feed"></div>
+
+<div id="ammo-counter">
+  <span id="ammo">30</span> / <span id="reserve">90</span>
+</div>
+
+<div id="scoreboard">
+  <h2>Scoreboard (Tab)</h2>
+  <div id="score-list"></div>
+</div>
+
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.module.js';
 import opensockit from 'https://opensockit.onrender.com/opensockit.js';
@@ -16,47 +146,168 @@ import opensockit from 'https://opensockit.onrender.com/opensockit.js';
 const sockit = new opensockit();
 await sockit.connect();
 
-console.log('Connected to OpenSockit!');
+console.log('Connected to FPS Arena!');
+
+// --- Game State ---
+const gameState = {
+  health: 100,
+  maxHealth: 100,
+  kills: 0,
+  deaths: 0,
+  ammo: 30,
+  reserve: 90,
+  isReloading: false
+};
 
 // --- Scene Setup ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87CEEB);
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-camera.position.y = 2;
-camera.position.z = 5;
+scene.fog = new THREE.Fog(0x87CEEB, 0, 100);
 
-const renderer = new THREE.WebGLRenderer();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.y = 1.7; // Eye level
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
-// --- Player ---
-const players = {}; // userId -> mesh
-const playerGeometry = new THREE.BoxGeometry(1, 2, 1);
-const playerMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+// --- Player Models ---
+const players = {};
+function createPlayerModel() {
+  const group = new THREE.Group();
+  
+  // Body
+  const bodyGeo = new THREE.BoxGeometry(0.6, 1, 0.4);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.5;
+  body.castShadow = true;
+  group.add(body);
+  
+  // Head
+  const headGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xffdbac });
+  const head = new THREE.Mesh(headGeo, headMat);
+  head.position.y = 1.2;
+  head.castShadow = true;
+  group.add(head);
+  
+  // Arms
+  const armGeo = new THREE.BoxGeometry(0.15, 0.6, 0.15);
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+  
+  const leftArm = new THREE.Mesh(armGeo, armMat);
+  leftArm.position.set(-0.4, 0.4, 0);
+  leftArm.castShadow = true;
+  group.add(leftArm);
+  
+  const rightArm = new THREE.Mesh(armGeo, armMat);
+  rightArm.position.set(0.4, 0.4, 0);
+  rightArm.castShadow = true;
+  group.add(rightArm);
+  
+  // Legs
+  const legGeo = new THREE.BoxGeometry(0.2, 0.6, 0.2);
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+  
+  const leftLeg = new THREE.Mesh(legGeo, legMat);
+  leftLeg.position.set(-0.15, -0.3, 0);
+  leftLeg.castShadow = true;
+  group.add(leftLeg);
+  
+  const rightLeg = new THREE.Mesh(legGeo, legMat);
+  rightLeg.position.set(0.15, -0.3, 0);
+  rightLeg.castShadow = true;
+  group.add(rightLeg);
+  
+  // Health bar above head
+  const healthBarGeo = new THREE.PlaneGeometry(0.6, 0.1);
+  const healthBarMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
+  const healthBar = new THREE.Mesh(healthBarGeo, healthBarMat);
+  healthBar.position.y = 1.7;
+  group.add(healthBar);
+  
+  group.userData.healthBar = healthBar;
+  group.userData.health = 100;
+  
+  return group;
+}
 
-// --- Ground ---
+// --- Ground & Environment ---
 const groundGeo = new THREE.PlaneGeometry(100, 100);
 const groundMat = new THREE.MeshStandardMaterial({ color: 0x228B22 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
 scene.add(ground);
 
-// --- Light ---
-const light = new THREE.DirectionalLight(0xffffff, 1);
-light.position.set(10, 10, 10);
-scene.add(light);
+// Add some cover
+for(let i = 0; i < 15; i++) {
+  const boxGeo = new THREE.BoxGeometry(2, 2, 2);
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+  const box = new THREE.Mesh(boxGeo, boxMat);
+  box.position.set(
+    (Math.random() - 0.5) * 80,
+    1,
+    (Math.random() - 0.5) * 80
+  );
+  box.castShadow = true;
+  box.receiveShadow = true;
+  scene.add(box);
+}
+
+// --- Lighting ---
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(50, 50, 50);
+sun.castShadow = true;
+sun.shadow.camera.left = -50;
+sun.shadow.camera.right = 50;
+sun.shadow.camera.top = 50;
+sun.shadow.camera.bottom = -50;
+scene.add(sun);
 
 // --- Input ---
 const keys = {};
-document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+const mouse = { x: 0, y: 0 };
+let isPointerLocked = false;
+
+document.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if(e.key.toLowerCase() === 'r' && !gameState.isReloading) reload();
+});
 document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
+document.addEventListener('click', () => {
+  if(!isPointerLocked) {
+    renderer.domElement.requestPointerLock();
+  } else {
+    shoot();
+  }
+});
+
+document.addEventListener('pointerlockchange', () => {
+  isPointerLocked = document.pointerLockElement === renderer.domElement;
+});
+
+document.addEventListener('mousemove', e => {
+  if(isPointerLocked) {
+    mouse.x += e.movementX * 0.002;
+    mouse.y -= e.movementY * 0.002;
+    mouse.y = Math.max(-Math.PI/2, Math.min(Math.PI/2, mouse.y));
+  }
+});
+
+// --- Player Management ---
 let playerId = null;
+
 sockit.getSocket().on('userConnected', id => {
-  players[id] = new THREE.Mesh(playerGeometry, playerMaterial.clone());
-  players[id].material.color.setHex(Math.random() * 0xffffff);
+  players[id] = createPlayerModel();
   scene.add(players[id]);
-  console.log(`User ${id} connected`);
+  console.log(`Player ${id} joined`);
 });
 
 sockit.getSocket().on('userDisconnected', id => {
@@ -66,70 +317,240 @@ sockit.getSocket().on('userDisconnected', id => {
   }
 });
 
-// Identify self
 playerId = sockit.getSocket().id;
-players[playerId] = new THREE.Mesh(playerGeometry, playerMaterial.clone());
-players[playerId].material.color.setHex(0x0000ff);
+players[playerId] = createPlayerModel();
+players[playerId].visible = false; // Hide own player model
 scene.add(players[playerId]);
 
 // --- Multiplayer Sync ---
-sockit.getSocket().on('move', ({id, pos}) => {
-  if(players[id]) players[id].position.set(pos.x, pos.y, pos.z);
+sockit.getSocket().on('move', ({id, pos, rot}) => {
+  if(players[id] && id !== playerId) {
+    players[id].position.set(pos.x, pos.y, pos.z);
+    players[id].rotation.y = rot;
+  }
 });
 
 sockit.getSocket().on('shoot', ({id, pos, dir}) => {
-  createBullet(new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Vector3(dir.x, dir.y, dir.z));
+  createBullet(new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Vector3(dir.x, dir.y, dir.z), id);
 });
+
+sockit.getSocket().on('hit', ({targetId, damage, shooterId}) => {
+  if(targetId === playerId) {
+    takeDamage(damage);
+  }
+  if(players[targetId]) {
+    players[targetId].userData.health = Math.max(0, (players[targetId].userData.health || 100) - damage);
+    updatePlayerHealthBar(targetId);
+  }
+});
+
+sockit.getSocket().on('death', ({victimId, killerId}) => {
+  if(victimId === playerId) {
+    gameState.deaths++;
+    document.getElementById('deaths').textContent = gameState.deaths;
+    respawn();
+  }
+  if(killerId === playerId) {
+    gameState.kills++;
+    document.getElementById('kills').textContent = gameState.kills;
+  }
+  addKillFeed(killerId, victimId);
+});
+
+// --- Health System ---
+function takeDamage(amount) {
+  gameState.health = Math.max(0, gameState.health - amount);
+  updateHealthUI();
+  
+  if(gameState.health <= 0) {
+    sockit.send('death', { victimId: playerId });
+  }
+}
+
+function updateHealthUI() {
+  document.getElementById('health-text').textContent = gameState.health;
+  document.getElementById('health-fill').style.width = (gameState.health / gameState.maxHealth * 100) + '%';
+}
+
+function updatePlayerHealthBar(id) {
+  if(players[id] && players[id].userData.healthBar) {
+    const healthPercent = players[id].userData.health / 100;
+    players[id].userData.healthBar.scale.x = healthPercent;
+    players[id].userData.healthBar.material.color.setHex(
+      healthPercent > 0.5 ? 0x00ff00 : healthPercent > 0.25 ? 0xffff00 : 0xff0000
+    );
+  }
+}
+
+function respawn() {
+  gameState.health = gameState.maxHealth;
+  gameState.ammo = 30;
+  gameState.reserve = 90;
+  updateHealthUI();
+  updateAmmoUI();
+  
+  players[playerId].position.set(
+    (Math.random() - 0.5) * 40,
+    0,
+    (Math.random() - 0.5) * 40
+  );
+  players[playerId].userData.health = 100;
+}
+
+// --- Weapon System ---
+function shoot() {
+  if(gameState.ammo <= 0 || gameState.isReloading) return;
+  
+  gameState.ammo--;
+  updateAmmoUI();
+  
+  const dir = new THREE.Vector3(0, 0, -1);
+  dir.applyQuaternion(camera.quaternion);
+  
+  const bulletPos = camera.position.clone();
+  createBullet(bulletPos, dir, playerId);
+  sockit.send('shoot', { id: playerId, pos: bulletPos, dir });
+  
+  // Check for hits
+  checkBulletHits(bulletPos, dir);
+}
+
+function reload() {
+  if(gameState.reserve <= 0 || gameState.ammo === 30) return;
+  
+  gameState.isReloading = true;
+  setTimeout(() => {
+    const needed = 30 - gameState.ammo;
+    const toReload = Math.min(needed, gameState.reserve);
+    gameState.ammo += toReload;
+    gameState.reserve -= toReload;
+    gameState.isReloading = false;
+    updateAmmoUI();
+  }, 1500);
+}
+
+function updateAmmoUI() {
+  document.getElementById('ammo').textContent = gameState.ammo;
+  document.getElementById('reserve').textContent = gameState.reserve;
+}
 
 // --- Bullets ---
 const bullets = [];
-function createBullet(pos, dir) {
+function createBullet(pos, dir, shooterId) {
   const geo = new THREE.SphereGeometry(0.1, 8, 8);
   const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
   const bullet = new THREE.Mesh(geo, mat);
   bullet.position.copy(pos);
-  bullet.userData.dir = dir.clone().normalize().multiplyScalar(0.5);
+  bullet.userData.dir = dir.clone().normalize().multiplyScalar(1.5);
+  bullet.userData.shooterId = shooterId;
+  bullet.userData.life = 100;
   scene.add(bullet);
   bullets.push(bullet);
 }
 
-// --- Animate ---
+function checkBulletHits(pos, dir) {
+  const raycaster = new THREE.Raycaster(pos, dir);
+  
+  for(let id in players) {
+    if(id === playerId) continue;
+    
+    const intersects = raycaster.intersectObject(players[id], true);
+    if(intersects.length > 0 && intersects[0].distance < 100) {
+      const damage = 25;
+      sockit.send('hit', { targetId: id, damage, shooterId: playerId });
+      
+      if(players[id].userData.health - damage <= 0) {
+        sockit.send('death', { victimId: id, killerId: playerId });
+      }
+      break;
+    }
+  }
+}
+
+function addKillFeed(killerId, victimId) {
+  const feed = document.getElementById('kill-feed');
+  const msg = document.createElement('div');
+  msg.className = 'kill-msg';
+  msg.textContent = `Player ${killerId.slice(0,4)} eliminated Player ${victimId.slice(0,4)}`;
+  feed.insertBefore(msg, feed.firstChild);
+  
+  setTimeout(() => msg.remove(), 5000);
+}
+
+// --- Animation Loop ---
 function animate() {
   requestAnimationFrame(animate);
 
+  if(!players[playerId]) return;
+
   // Player movement
   const speed = 0.1;
-  if(keys['w']) players[playerId].position.z -= speed;
-  if(keys['s']) players[playerId].position.z += speed;
-  if(keys['a']) players[playerId].position.x -= speed;
-  if(keys['d']) players[playerId].position.x += speed;
+  const forward = new THREE.Vector3(0, 0, -1);
+  forward.applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
+  
+  const right = new THREE.Vector3(1, 0, 0);
+  right.applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
+  
+  if(keys['w']) {
+    players[playerId].position.add(forward.multiplyScalar(speed));
+  }
+  if(keys['s']) {
+    players[playerId].position.add(forward.multiplyScalar(-speed));
+  }
+  if(keys['a']) {
+    players[playerId].position.add(right.multiplyScalar(-speed));
+  }
+  if(keys['d']) {
+    players[playerId].position.add(right.multiplyScalar(speed));
+  }
+  
+  // Clamp position to arena
+  players[playerId].position.x = Math.max(-45, Math.min(45, players[playerId].position.x));
+  players[playerId].position.z = Math.max(-45, Math.min(45, players[playerId].position.z));
+  
+  // Send position
+  sockit.send('move', { 
+    id: playerId, 
+    pos: players[playerId].position,
+    rot: mouse.x
+  });
 
-  // Send position to other clients
-  sockit.send('move', { id: playerId, pos: players[playerId].position });
+  // Update camera
+  camera.position.copy(players[playerId].position);
+  camera.position.y = 1.7;
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = mouse.x;
+  camera.rotation.x = mouse.y;
 
   // Update bullets
-  bullets.forEach((b, i) => {
+  for(let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
     b.position.add(b.userData.dir);
-    if(Math.abs(b.position.x) > 50 || Math.abs(b.position.z) > 50) {
+    b.userData.life--;
+    
+    if(b.userData.life <= 0 || Math.abs(b.position.x) > 50 || Math.abs(b.position.z) > 50) {
       scene.remove(b);
       bullets.splice(i, 1);
     }
-  });
-
-  camera.position.x = players[playerId].position.x;
-  camera.position.z = players[playerId].position.z + 5;
-  camera.lookAt(players[playerId].position);
+  }
+  
+  // Make health bars face camera
+  for(let id in players) {
+    if(players[id].userData.healthBar) {
+      players[id].userData.healthBar.lookAt(camera.position);
+    }
+  }
 
   renderer.render(scene, camera);
 }
 
 animate();
 
-// --- Shooting ---
-document.addEventListener('click', () => {
-  const dir = new THREE.Vector3(0, 0, -1);
-  createBullet(players[playerId].position.clone(), dir);
-  sockit.send('shoot', { id: playerId, pos: players[playerId].position, dir });
+// Handle window resize
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
 </script>
