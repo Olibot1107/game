@@ -92,18 +92,6 @@
       100% { opacity: 0; }
     }
     
-    #scoreboard {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(0,0,0,0.8);
-      padding: 20px;
-      border-radius: 10px;
-      color: white;
-      display: none;
-    }
-    
     #ammo-counter {
       position: absolute;
       bottom: 30px;
@@ -111,6 +99,15 @@
       color: white;
       font-size: 24px;
       font-weight: bold;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+    }
+    
+    #debug {
+      position: absolute;
+      bottom: 80px;
+      left: 20px;
+      color: white;
+      font-size: 12px;
       text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
     }
   </style>
@@ -134,9 +131,8 @@
   <span id="ammo">30</span> / <span id="reserve">90</span>
 </div>
 
-<div id="scoreboard">
-  <h2>Scoreboard (Tab)</h2>
-  <div id="score-list"></div>
+<div id="debug">
+  Players: <span id="player-count">0</span>
 </div>
 
 <script type="module">
@@ -159,13 +155,16 @@ const gameState = {
   isReloading: false
 };
 
+// Store player health states
+const playerHealths = {};
+
 // --- Scene Setup ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87CEEB);
 scene.fog = new THREE.Fog(0x87CEEB, 0, 100);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-camera.position.y = 1.7; // Eye level
+camera.position.y = 1.7;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -174,12 +173,12 @@ document.body.appendChild(renderer.domElement);
 
 // --- Player Models ---
 const players = {};
-function createPlayerModel() {
+function createPlayerModel(color = 0x333333) {
   const group = new THREE.Group();
   
   // Body
   const bodyGeo = new THREE.BoxGeometry(0.6, 1, 0.4);
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color });
   const body = new THREE.Mesh(bodyGeo, bodyMat);
   body.position.y = 0.5;
   body.castShadow = true;
@@ -222,13 +221,22 @@ function createPlayerModel() {
   group.add(rightLeg);
   
   // Health bar above head
-  const healthBarGeo = new THREE.PlaneGeometry(0.6, 0.1);
+  const healthBarBg = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.7, 0.1),
+    new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+  );
+  healthBarBg.position.y = 1.8;
+  group.add(healthBarBg);
+  
+  const healthBarGeo = new THREE.PlaneGeometry(0.6, 0.08);
   const healthBarMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
   const healthBar = new THREE.Mesh(healthBarGeo, healthBarMat);
-  healthBar.position.y = 1.7;
+  healthBar.position.y = 1.8;
+  healthBar.position.z = 0.01;
   group.add(healthBar);
   
   group.userData.healthBar = healthBar;
+  group.userData.healthBarBg = healthBarBg;
   group.userData.health = 100;
   
   return group;
@@ -304,57 +312,139 @@ document.addEventListener('mousemove', e => {
 // --- Player Management ---
 let playerId = null;
 
-sockit.getSocket().on('userConnected', id => {
-  players[id] = createPlayerModel();
-  scene.add(players[id]);
-  console.log(`Player ${id} joined`);
-});
-
-sockit.getSocket().on('userDisconnected', id => {
-  if(players[id]) {
-    scene.remove(players[id]);
-    delete players[id];
+// Listen for new players
+sockit.getSocket().on('userConnected', (data) => {
+  const id = data.id || data;
+  console.log('User connected:', id);
+  
+  if(!players[id] && id !== playerId) {
+    const color = Math.random() * 0xffffff;
+    players[id] = createPlayerModel(color);
+    scene.add(players[id]);
+    playerHealths[id] = 100;
+    updatePlayerCount();
   }
 });
 
+// Listen for disconnects
+sockit.getSocket().on('userDisconnected', (data) => {
+  const id = data.id || data;
+  console.log('User disconnected:', id);
+  
+  if(players[id]) {
+    scene.remove(players[id]);
+    delete players[id];
+    delete playerHealths[id];
+    updatePlayerCount();
+  }
+});
+
+// Get my ID
 playerId = sockit.getSocket().id;
-players[playerId] = createPlayerModel();
-players[playerId].visible = false; // Hide own player model
+console.log('My ID:', playerId);
+
+// Create my player (invisible to self)
+players[playerId] = createPlayerModel(0x0000ff);
+players[playerId].visible = false;
 scene.add(players[playerId]);
+playerHealths[playerId] = 100;
+
+function updatePlayerCount() {
+  const count = Object.keys(players).length;
+  document.getElementById('player-count').textContent = count;
+}
+
+updatePlayerCount();
 
 // --- Multiplayer Sync ---
-sockit.getSocket().on('move', ({id, pos, rot}) => {
-  if(players[id] && id !== playerId) {
+sockit.getSocket().on('move', (data) => {
+  const {id, pos, rot} = data;
+  
+  if(!players[id]) {
+    // Player doesn't exist yet, create them
+    const color = Math.random() * 0xffffff;
+    players[id] = createPlayerModel(color);
+    scene.add(players[id]);
+    playerHealths[id] = 100;
+    updatePlayerCount();
+  }
+  
+  if(id !== playerId && players[id]) {
     players[id].position.set(pos.x, pos.y, pos.z);
     players[id].rotation.y = rot;
   }
 });
 
-sockit.getSocket().on('shoot', ({id, pos, dir}) => {
+sockit.getSocket().on('shoot', (data) => {
+  const {id, pos, dir} = data;
   createBullet(new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Vector3(dir.x, dir.y, dir.z), id);
+  
+  // Play muzzle flash effect
+  if(players[id]) {
+    const flash = new THREE.PointLight(0xffff00, 2, 5);
+    flash.position.copy(players[id].position);
+    flash.position.y = 1.5;
+    scene.add(flash);
+    setTimeout(() => scene.remove(flash), 50);
+  }
 });
 
-sockit.getSocket().on('hit', ({targetId, damage, shooterId}) => {
+sockit.getSocket().on('hit', (data) => {
+  const {targetId, damage, shooterId} = data;
+  console.log('Hit event:', data);
+  
   if(targetId === playerId) {
     takeDamage(damage);
+    
+    // Check if dead
+    if(gameState.health <= 0) {
+      gameState.deaths++;
+      document.getElementById('deaths').textContent = gameState.deaths;
+      addKillFeed(shooterId, playerId);
+      
+      // Tell everyone I died
+      sockit.send('playerDied', { victimId: playerId, killerId: shooterId });
+      
+      // Respawn after delay
+      setTimeout(() => respawn(), 2000);
+    }
   }
+  
+  // Update target's health bar
   if(players[targetId]) {
-    players[targetId].userData.health = Math.max(0, (players[targetId].userData.health || 100) - damage);
+    playerHealths[targetId] = Math.max(0, (playerHealths[targetId] || 100) - damage);
     updatePlayerHealthBar(targetId);
   }
 });
 
-sockit.getSocket().on('death', ({victimId, killerId}) => {
-  if(victimId === playerId) {
-    gameState.deaths++;
-    document.getElementById('deaths').textContent = gameState.deaths;
-    respawn();
-  }
+sockit.getSocket().on('playerDied', (data) => {
+  const {victimId, killerId} = data;
+  console.log('Player died:', data);
+  
   if(killerId === playerId) {
     gameState.kills++;
     document.getElementById('kills').textContent = gameState.kills;
   }
+  
   addKillFeed(killerId, victimId);
+  
+  // Reset victim's health
+  if(playerHealths[victimId] !== undefined) {
+    playerHealths[victimId] = 100;
+    if(players[victimId]) {
+      updatePlayerHealthBar(victimId);
+    }
+  }
+});
+
+sockit.getSocket().on('playerRespawned', (data) => {
+  const {id} = data;
+  if(playerHealths[id] !== undefined) {
+    playerHealths[id] = 100;
+    if(players[id]) {
+      updatePlayerHealthBar(id);
+    }
+  }
 });
 
 // --- Health System ---
@@ -362,20 +452,24 @@ function takeDamage(amount) {
   gameState.health = Math.max(0, gameState.health - amount);
   updateHealthUI();
   
-  if(gameState.health <= 0) {
-    sockit.send('death', { victimId: playerId });
-  }
+  // Flash red
+  renderer.domElement.style.border = '5px solid red';
+  setTimeout(() => renderer.domElement.style.border = 'none', 100);
 }
 
 function updateHealthUI() {
-  document.getElementById('health-text').textContent = gameState.health;
+  document.getElementById('health-text').textContent = Math.ceil(gameState.health);
   document.getElementById('health-fill').style.width = (gameState.health / gameState.maxHealth * 100) + '%';
 }
 
 function updatePlayerHealthBar(id) {
   if(players[id] && players[id].userData.healthBar) {
-    const healthPercent = players[id].userData.health / 100;
+    const health = playerHealths[id] || 100;
+    const healthPercent = health / 100;
+    
     players[id].userData.healthBar.scale.x = healthPercent;
+    players[id].userData.healthBar.position.x = -(1 - healthPercent) * 0.3;
+    
     players[id].userData.healthBar.material.color.setHex(
       healthPercent > 0.5 ? 0x00ff00 : healthPercent > 0.25 ? 0xffff00 : 0xff0000
     );
@@ -394,12 +488,16 @@ function respawn() {
     0,
     (Math.random() - 0.5) * 40
   );
-  players[playerId].userData.health = 100;
+  
+  playerHealths[playerId] = 100;
+  
+  // Tell others I respawned
+  sockit.send('playerRespawned', { id: playerId });
 }
 
 // --- Weapon System ---
 function shoot() {
-  if(gameState.ammo <= 0 || gameState.isReloading) return;
+  if(gameState.ammo <= 0 || gameState.isReloading || gameState.health <= 0) return;
   
   gameState.ammo--;
   updateAmmoUI();
@@ -409,14 +507,53 @@ function shoot() {
   
   const bulletPos = camera.position.clone();
   createBullet(bulletPos, dir, playerId);
-  sockit.send('shoot', { id: playerId, pos: bulletPos, dir });
   
-  // Check for hits
-  checkBulletHits(bulletPos, dir);
+  // Broadcast shot
+  sockit.send('shoot', { 
+    id: playerId, 
+    pos: { x: bulletPos.x, y: bulletPos.y, z: bulletPos.z },
+    dir: { x: dir.x, y: dir.y, z: dir.z }
+  });
+  
+  // Check for hits with raycasting
+  const raycaster = new THREE.Raycaster(bulletPos, dir);
+  
+  for(let id in players) {
+    if(id === playerId) continue;
+    
+    const intersects = raycaster.intersectObject(players[id], true);
+    if(intersects.length > 0 && intersects[0].distance < 150) {
+      const damage = 25;
+      console.log('Hit player:', id, 'damage:', damage);
+      
+      // Send hit to everyone
+      sockit.send('hit', { 
+        targetId: id, 
+        damage, 
+        shooterId: playerId 
+      });
+      
+      // Update local health
+      playerHealths[id] = Math.max(0, (playerHealths[id] || 100) - damage);
+      updatePlayerHealthBar(id);
+      
+      // Check if killed
+      if(playerHealths[id] <= 0) {
+        gameState.kills++;
+        document.getElementById('kills').textContent = gameState.kills;
+        addKillFeed(playerId, id);
+        
+        sockit.send('playerDied', { victimId: id, killerId: playerId });
+        playerHealths[id] = 100;
+      }
+      
+      break;
+    }
+  }
 }
 
 function reload() {
-  if(gameState.reserve <= 0 || gameState.ammo === 30) return;
+  if(gameState.reserve <= 0 || gameState.ammo === 30 || gameState.health <= 0) return;
   
   gameState.isReloading = true;
   setTimeout(() => {
@@ -437,41 +574,24 @@ function updateAmmoUI() {
 // --- Bullets ---
 const bullets = [];
 function createBullet(pos, dir, shooterId) {
-  const geo = new THREE.SphereGeometry(0.1, 8, 8);
+  const geo = new THREE.SphereGeometry(0.15, 8, 8);
   const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
   const bullet = new THREE.Mesh(geo, mat);
   bullet.position.copy(pos);
-  bullet.userData.dir = dir.clone().normalize().multiplyScalar(1.5);
+  bullet.userData.dir = dir.clone().normalize().multiplyScalar(2);
   bullet.userData.shooterId = shooterId;
-  bullet.userData.life = 100;
+  bullet.userData.life = 75;
   scene.add(bullet);
   bullets.push(bullet);
-}
-
-function checkBulletHits(pos, dir) {
-  const raycaster = new THREE.Raycaster(pos, dir);
-  
-  for(let id in players) {
-    if(id === playerId) continue;
-    
-    const intersects = raycaster.intersectObject(players[id], true);
-    if(intersects.length > 0 && intersects[0].distance < 100) {
-      const damage = 25;
-      sockit.send('hit', { targetId: id, damage, shooterId: playerId });
-      
-      if(players[id].userData.health - damage <= 0) {
-        sockit.send('death', { victimId: id, killerId: playerId });
-      }
-      break;
-    }
-  }
 }
 
 function addKillFeed(killerId, victimId) {
   const feed = document.getElementById('kill-feed');
   const msg = document.createElement('div');
   msg.className = 'kill-msg';
-  msg.textContent = `Player ${killerId.slice(0,4)} eliminated Player ${victimId.slice(0,4)}`;
+  const killerName = killerId === playerId ? 'You' : `Player ${killerId.slice(0,4)}`;
+  const victimName = victimId === playerId ? 'You' : `Player ${victimId.slice(0,4)}`;
+  msg.textContent = `${killerName} eliminated ${victimName}`;
   feed.insertBefore(msg, feed.firstChild);
   
   setTimeout(() => msg.remove(), 5000);
@@ -483,37 +603,43 @@ function animate() {
 
   if(!players[playerId]) return;
 
-  // Player movement
-  const speed = 0.1;
-  const forward = new THREE.Vector3(0, 0, -1);
-  forward.applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
-  
-  const right = new THREE.Vector3(1, 0, 0);
-  right.applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
-  
-  if(keys['w']) {
-    players[playerId].position.add(forward.multiplyScalar(speed));
+  // Player movement (only if alive)
+  if(gameState.health > 0) {
+    const speed = 0.15;
+    const forward = new THREE.Vector3(0, 0, -1);
+    forward.applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
+    
+    const right = new THREE.Vector3(1, 0, 0);
+    right.applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
+    
+    if(keys['w']) {
+      players[playerId].position.add(forward.multiplyScalar(speed));
+    }
+    if(keys['s']) {
+      players[playerId].position.add(forward.multiplyScalar(-speed));
+    }
+    if(keys['a']) {
+      players[playerId].position.add(right.multiplyScalar(-speed));
+    }
+    if(keys['d']) {
+      players[playerId].position.add(right.multiplyScalar(speed));
+    }
+    
+    // Clamp position
+    players[playerId].position.x = Math.max(-45, Math.min(45, players[playerId].position.x));
+    players[playerId].position.z = Math.max(-45, Math.min(45, players[playerId].position.z));
+    
+    // Send position frequently
+    sockit.send('move', { 
+      id: playerId, 
+      pos: { 
+        x: players[playerId].position.x, 
+        y: players[playerId].position.y, 
+        z: players[playerId].position.z 
+      },
+      rot: mouse.x
+    });
   }
-  if(keys['s']) {
-    players[playerId].position.add(forward.multiplyScalar(-speed));
-  }
-  if(keys['a']) {
-    players[playerId].position.add(right.multiplyScalar(-speed));
-  }
-  if(keys['d']) {
-    players[playerId].position.add(right.multiplyScalar(speed));
-  }
-  
-  // Clamp position to arena
-  players[playerId].position.x = Math.max(-45, Math.min(45, players[playerId].position.x));
-  players[playerId].position.z = Math.max(-45, Math.min(45, players[playerId].position.z));
-  
-  // Send position
-  sockit.send('move', { 
-    id: playerId, 
-    pos: players[playerId].position,
-    rot: mouse.x
-  });
 
   // Update camera
   camera.position.copy(players[playerId].position);
@@ -538,6 +664,7 @@ function animate() {
   for(let id in players) {
     if(players[id].userData.healthBar) {
       players[id].userData.healthBar.lookAt(camera.position);
+      players[id].userData.healthBarBg.lookAt(camera.position);
     }
   }
 
