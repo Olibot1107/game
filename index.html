@@ -223,16 +223,18 @@ function createPlayerModel(color = 0x333333) {
   // Health bar above head
   const healthBarBg = new THREE.Mesh(
     new THREE.PlaneGeometry(0.7, 0.1),
-    new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+    new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
   );
   healthBarBg.position.y = 1.8;
+  healthBarBg.renderOrder = 999;
   group.add(healthBarBg);
   
   const healthBarGeo = new THREE.PlaneGeometry(0.6, 0.08);
-  const healthBarMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
+  const healthBarMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
   const healthBar = new THREE.Mesh(healthBarGeo, healthBarMat);
   healthBar.position.y = 1.8;
   healthBar.position.z = 0.01;
+  healthBar.renderOrder = 1000;
   group.add(healthBar);
   
   group.userData.healthBar = healthBar;
@@ -304,7 +306,7 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('mousemove', e => {
   if(isPointerLocked) {
     mouse.x += e.movementX * 0.002;
-    mouse.y -= e.movementY * 0.002;
+    mouse.y += e.movementY * 0.002;
     mouse.y = Math.max(-Math.PI/2, Math.min(Math.PI/2, mouse.y));
   }
 });
@@ -428,6 +430,15 @@ sockit.getSocket().on('playerDied', (data) => {
   
   addKillFeed(killerId, victimId);
   
+  // Teleport victim to random spawn point
+  if(players[victimId]) {
+    players[victimId].position.set(
+      (Math.random() - 0.5) * 80,
+      0,
+      (Math.random() - 0.5) * 80
+    );
+  }
+  
   // Reset victim's health
   if(playerHealths[victimId] !== undefined) {
     playerHealths[victimId] = 100;
@@ -483,16 +494,24 @@ function respawn() {
   updateHealthUI();
   updateAmmoUI();
   
+  // Random spawn position
   players[playerId].position.set(
-    (Math.random() - 0.5) * 40,
+    (Math.random() - 0.5) * 80,
     0,
-    (Math.random() - 0.5) * 40
+    (Math.random() - 0.5) * 80
   );
   
   playerHealths[playerId] = 100;
   
-  // Tell others I respawned
-  sockit.send('playerRespawned', { id: playerId });
+  // Tell others I respawned and where
+  sockit.send('playerRespawned', { 
+    id: playerId,
+    pos: {
+      x: players[playerId].position.x,
+      y: players[playerId].position.y,
+      z: players[playerId].position.z
+    }
+  });
 }
 
 // --- Weapon System ---
