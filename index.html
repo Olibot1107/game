@@ -3,50 +3,171 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenSockit Demo</title>
+    <title>Chess Game</title>
+    <style>
+        #chessBoard {
+            display: grid;
+            grid-template-columns: repeat(8, 50px);
+            grid-template-rows: repeat(8, 50px);
+            border: 2px solid black;
+            width: 400px;
+            margin: 20px auto;
+        }
+        .square {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 30px;
+            cursor: pointer;
+        }
+        .light {
+            background-color: #f0d9b5;
+        }
+        .dark {
+            background-color: #b58863;
+        }
+        #messages {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin: 20px;
+        }
+    </style>
 </head>
 <body>
-    <h1>OpenSockit Test</h1>
+    <h1>Chess Game</h1>
     <div id="status">Connecting...</div>
+    <div id="chessBoard"></div>
     <input type="text" id="messageInput" placeholder="Type a message">
     <button onclick="sendMessage()">Send</button>
     <div id="messages"></div>
-    <div id="game">
-        <button onclick="startGame()">Start New Game as Host</button>
-        <div id="hostPanel" style="display:none;">
-            <input type="number" id="secretNumber" placeholder="Enter secret number 1-100" min="1" max="100">
-            <button onclick="setSecret()">Set Secret Number</button>
-        </div>
-        <div id="guessPanel">
-            <input type="number" id="guessInput" placeholder="Guess 1-100" min="1" max="100">
-            <button onclick="sendGuess()">Guess</button>
-        </div>
-        <div id="gameStatus"></div>
-    </div>
     <script type="module">
         import opensockit from 'https://opensockit.onrender.com/opensockit.js';
         const sockit = new opensockit();
-        let isHost = false;
-        let secretNumber = null;
+
+        const board = [
+            ['r','n','b','q','k','b','n','r'],
+            ['p','p','p','p','p','p','p','p'],
+            ['','','','','','','',''],
+            ['','','','','','','',''],
+            ['','','','','','','',''],
+            ['','','','','','','',''],
+            ['P','P','P','P','P','P','P','P'],
+            ['R','N','B','Q','K','B','N','R']
+        ];
+
+        const pieceSymbols = {
+            'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+            'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙'
+        };
+
+        let selectedSquare = null;
+
+        function renderBoard() {
+            const boardDiv = document.getElementById('chessBoard');
+            boardDiv.innerHTML = '';
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const square = document.createElement('div');
+                    square.className = 'square ' + ((row + col) % 2 === 0 ? 'light' : 'dark');
+                    square.dataset.row = row;
+                    square.dataset.col = col;
+                    square.textContent = pieceSymbols[board[row][col]] || '';
+                    square.onclick = () => onSquareClick(row, col);
+                    boardDiv.appendChild(square);
+                }
+            }
+        }
+
+        function onSquareClick(row, col) {
+            if (selectedSquare) {
+                if (isValidMove(selectedSquare.row, selectedSquare.col, row, col)) {
+                    const from = String.fromCharCode(97 + selectedSquare.col) + (8 - selectedSquare.row);
+                    const to = String.fromCharCode(97 + col) + (8 - row);
+                    sockit.send('move ' + from + ' ' + to);
+                    board[row][col] = board[selectedSquare.row][selectedSquare.col];
+                    board[selectedSquare.row][selectedSquare.col] = '';
+                    renderBoard();
+                }
+                selectedSquare = null;
+            } else {
+                if (board[row][col]) {
+                    selectedSquare = {row, col};
+                }
+            }
+        }
+
+        function isValidMove(fromRow, fromCol, toRow, toCol) {
+            const piece = board[fromRow][fromCol];
+            const target = board[toRow][toCol];
+            if (piece === '') return false;
+            if (target && piece.toUpperCase() === target.toUpperCase()) return false;
+            const isWhite = piece === piece.toUpperCase();
+            const dRow = toRow - fromRow;
+            const dCol = toCol - fromCol;
+            switch (piece.toLowerCase()) {
+                case 'p':
+                    const direction = isWhite ? -1 : 1;
+                    if (dCol === 0 && dRow === direction && !target) return true;
+                    if (dCol === 0 && dRow === 2 * direction && fromRow === (isWhite ? 6 : 1) && !target) return true;
+                    if (Math.abs(dCol) === 1 && dRow === direction && target) return true;
+                    break;
+                case 'r':
+                    if (dRow === 0 || dCol === 0) {
+                        return isPathClear(fromRow, fromCol, toRow, toCol);
+                    }
+                    break;
+                case 'n':
+                    if ((Math.abs(dRow) === 2 && Math.abs(dCol) === 1) || (Math.abs(dRow) === 1 && Math.abs(dCol) === 2)) return true;
+                    break;
+                case 'b':
+                    if (Math.abs(dRow) === Math.abs(dCol)) {
+                        return isPathClear(fromRow, fromCol, toRow, toCol);
+                    }
+                    break;
+                case 'q':
+                    if (dRow === 0 || dCol === 0 || Math.abs(dRow) === Math.abs(dCol)) {
+                        return isPathClear(fromRow, fromCol, toRow, toCol);
+                    }
+                    break;
+                case 'k':
+                    if (Math.abs(dRow) <= 1 && Math.abs(dCol) <= 1) return true;
+                    break;
+            }
+            return false;
+        }
+
+        function isPathClear(fromRow, fromCol, toRow, toCol) {
+            const dRow = Math.sign(toRow - fromRow);
+            const dCol = Math.sign(toCol - fromCol);
+            let r = fromRow + dRow;
+            let c = fromCol + dCol;
+            while (r !== toRow || c !== toCol) {
+                if (board[r][c]) return false;
+                r += dRow;
+                c += dCol;
+            }
+            return true;
+        }
 
         sockit.connect().then(() => {
             document.getElementById('status').textContent = 'Connected!';
+            renderBoard();
             sockit.getSocket().on('message', (msg) => {
                 const div = document.getElementById('messages');
                 div.innerHTML += '<p>Received: ' + msg + '</p>';
-
-                // Game logic
-                if (isHost && secretNumber && msg.startsWith('Guess: ')) {
-                    const guess = parseInt(msg.split(': ')[1]);
-                    if (isNaN(guess)) return;
-                    if (guess < secretNumber) {
-                        sockit.send('Higher!');
-                    } else if (guess > secretNumber) {
-                        sockit.send('Lower!');
-                    } else {
-                        sockit.send('Correct! You guessed it!');
-                        resetGame();
-                    }
+                if (msg.startsWith('move ')) {
+                    const parts = msg.split(' ');
+                    const from = parts[1];
+                    const to = parts[2];
+                    const fromCol = from.charCodeAt(0) - 97;
+                    const fromRow = 8 - parseInt(from[1]);
+                    const toCol = to.charCodeAt(0) - 97;
+                    const toRow = 8 - parseInt(to[1]);
+                    board[toRow][toCol] = board[fromRow][fromCol];
+                    board[fromRow][fromCol] = '';
+                    renderBoard();
                 }
             });
         }).catch((error) => {
@@ -58,42 +179,6 @@
             sockit.send(msg);
             document.getElementById('messageInput').value = '';
         };
-
-        window.startGame = () => {
-            isHost = true;
-            document.getElementById('hostPanel').style.display = 'block';
-            document.getElementById('guessPanel').style.display = 'none';
-            document.getElementById('gameStatus').textContent = 'Set your secret number.';
-        };
-
-        window.setSecret = () => {
-            secretNumber = parseInt(document.getElementById('secretNumber').value);
-            if (isNaN(secretNumber) || secretNumber < 1 || secretNumber > 100) {
-                alert('Please enter a valid number between 1 and 100.');
-                return;
-            }
-            document.getElementById('hostPanel').style.display = 'none';
-            document.getElementById('gameStatus').textContent = 'Secret set. Waiting for guesses...';
-            sockit.send('Game started! Guess my number between 1 and 100.');
-        };
-
-        window.sendGuess = () => {
-            const guess = parseInt(document.getElementById('guessInput').value);
-            if (isNaN(guess) || guess < 1 || guess > 100) {
-                alert('Please enter a valid number between 1 and 100.');
-                return;
-            }
-            sockit.send('Guess: ' + guess);
-            document.getElementById('guessInput').value = '';
-        };
-
-        function resetGame() {
-            isHost = false;
-            secretNumber = null;
-            document.getElementById('guessPanel').style.display = 'block';
-            document.getElementById('hostPanel').style.display = 'none';
-            document.getElementById('gameStatus').textContent = '';
-        }
     </script>
 </body>
 </html>
