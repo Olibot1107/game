@@ -1,184 +1,137 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chess Game</title>
-    <style>
-        #chessBoard {
-            display: grid;
-            grid-template-columns: repeat(8, 50px);
-            grid-template-rows: repeat(8, 50px);
-            border: 2px solid black;
-            width: 400px;
-            margin: 20px auto;
-        }
-        .square {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 30px;
-            cursor: pointer;
-        }
-        .light {
-            background-color: #f0d9b5;
-        }
-        .dark {
-            background-color: #b58863;
-        }
-        #messages {
-            max-height: 200px;
-            overflow-y: auto;
-            border: 1px solid #ccc;
-            padding: 10px;
-            margin: 20px;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>OpenSockit FPS Demo</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
 </head>
 <body>
-    <h1>Chess Game</h1>
-    <div id="status">Connecting...</div>
-    <div id="chessBoard"></div>
-    <input type="text" id="messageInput" placeholder="Type a message">
-    <button onclick="sendMessage()">Send</button>
-    <div id="messages"></div>
-    <script type="module">
-        import opensockit from 'https://opensockit.onrender.com/opensockit.js';
-        const sockit = new opensockit();
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.module.js';
+import opensockit from 'https://opensockit.onrender.com/opensockit.js';
 
-        const board = [
-            ['r','n','b','q','k','b','n','r'],
-            ['p','p','p','p','p','p','p','p'],
-            ['','','','','','','',''],
-            ['','','','','','','',''],
-            ['','','','','','','',''],
-            ['','','','','','','',''],
-            ['P','P','P','P','P','P','P','P'],
-            ['R','N','B','Q','K','B','N','R']
-        ];
+const sockit = new opensockit();
+await sockit.connect();
 
-        const pieceSymbols = {
-            'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
-            'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙'
-        };
+console.log('Connected to OpenSockit!');
 
-        let selectedSquare = null;
+// --- Scene Setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.y = 2;
+camera.position.z = 5;
 
-        function renderBoard() {
-            const boardDiv = document.getElementById('chessBoard');
-            boardDiv.innerHTML = '';
-            for (let row = 0; row < 8; row++) {
-                for (let col = 0; col < 8; col++) {
-                    const square = document.createElement('div');
-                    square.className = 'square ' + ((row + col) % 2 === 0 ? 'light' : 'dark');
-                    square.dataset.row = row;
-                    square.dataset.col = col;
-                    square.textContent = pieceSymbols[board[row][col]] || '';
-                    square.onclick = () => onSquareClick(row, col);
-                    boardDiv.appendChild(square);
-                }
-            }
-        }
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-        function onSquareClick(row, col) {
-            if (selectedSquare) {
-                if (isValidMove(selectedSquare.row, selectedSquare.col, row, col)) {
-                    const from = String.fromCharCode(97 + selectedSquare.col) + (8 - selectedSquare.row);
-                    const to = String.fromCharCode(97 + col) + (8 - row);
-                    sockit.send('move ' + from + ' ' + to);
-                    board[row][col] = board[selectedSquare.row][selectedSquare.col];
-                    board[selectedSquare.row][selectedSquare.col] = '';
-                    renderBoard();
-                }
-                selectedSquare = null;
-            } else {
-                if (board[row][col]) {
-                    selectedSquare = {row, col};
-                }
-            }
-        }
+// --- Player ---
+const players = {}; // userId -> mesh
+const playerGeometry = new THREE.BoxGeometry(1, 2, 1);
+const playerMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
 
-        function isValidMove(fromRow, fromCol, toRow, toCol) {
-            const piece = board[fromRow][fromCol];
-            const target = board[toRow][toCol];
-            if (piece === '') return false;
-            if (target && piece.toUpperCase() === target.toUpperCase()) return false;
-            const isWhite = piece === piece.toUpperCase();
-            const dRow = toRow - fromRow;
-            const dCol = toCol - fromCol;
-            switch (piece.toLowerCase()) {
-                case 'p':
-                    const direction = isWhite ? -1 : 1;
-                    if (dCol === 0 && dRow === direction && !target) return true;
-                    if (dCol === 0 && dRow === 2 * direction && fromRow === (isWhite ? 6 : 1) && !target) return true;
-                    if (Math.abs(dCol) === 1 && dRow === direction && target) return true;
-                    break;
-                case 'r':
-                    if (dRow === 0 || dCol === 0) {
-                        return isPathClear(fromRow, fromCol, toRow, toCol);
-                    }
-                    break;
-                case 'n':
-                    if ((Math.abs(dRow) === 2 && Math.abs(dCol) === 1) || (Math.abs(dRow) === 1 && Math.abs(dCol) === 2)) return true;
-                    break;
-                case 'b':
-                    if (Math.abs(dRow) === Math.abs(dCol)) {
-                        return isPathClear(fromRow, fromCol, toRow, toCol);
-                    }
-                    break;
-                case 'q':
-                    if (dRow === 0 || dCol === 0 || Math.abs(dRow) === Math.abs(dCol)) {
-                        return isPathClear(fromRow, fromCol, toRow, toCol);
-                    }
-                    break;
-                case 'k':
-                    if (Math.abs(dRow) <= 1 && Math.abs(dCol) <= 1) return true;
-                    break;
-            }
-            return false;
-        }
+// --- Ground ---
+const groundGeo = new THREE.PlaneGeometry(100, 100);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI/2;
+scene.add(ground);
 
-        function isPathClear(fromRow, fromCol, toRow, toCol) {
-            const dRow = Math.sign(toRow - fromRow);
-            const dCol = Math.sign(toCol - fromCol);
-            let r = fromRow + dRow;
-            let c = fromCol + dCol;
-            while (r !== toRow || c !== toCol) {
-                if (board[r][c]) return false;
-                r += dRow;
-                c += dCol;
-            }
-            return true;
-        }
+// --- Light ---
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(10, 10, 10);
+scene.add(light);
 
-        sockit.connect().then(() => {
-            document.getElementById('status').textContent = 'Connected!';
-            renderBoard();
-            sockit.getSocket().on('message', (msg) => {
-                const div = document.getElementById('messages');
-                div.innerHTML += '<p>Received: ' + msg + '</p>';
-                if (msg.startsWith('move ')) {
-                    const parts = msg.split(' ');
-                    const from = parts[1];
-                    const to = parts[2];
-                    const fromCol = from.charCodeAt(0) - 97;
-                    const fromRow = 8 - parseInt(from[1]);
-                    const toCol = to.charCodeAt(0) - 97;
-                    const toRow = 8 - parseInt(to[1]);
-                    board[toRow][toCol] = board[fromRow][fromCol];
-                    board[fromRow][fromCol] = '';
-                    renderBoard();
-                }
-            });
-        }).catch((error) => {
-            document.getElementById('status').textContent = 'Connection failed: ' + error.message;
-        });
+// --- Input ---
+const keys = {};
+document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-        window.sendMessage = () => {
-            const msg = document.getElementById('messageInput').value;
-            sockit.send(msg);
-            document.getElementById('messageInput').value = '';
-        };
-    </script>
+let playerId = null;
+sockit.getSocket().on('userConnected', id => {
+  players[id] = new THREE.Mesh(playerGeometry, playerMaterial.clone());
+  players[id].material.color.setHex(Math.random() * 0xffffff);
+  scene.add(players[id]);
+  console.log(`User ${id} connected`);
+});
+
+sockit.getSocket().on('userDisconnected', id => {
+  if(players[id]) {
+    scene.remove(players[id]);
+    delete players[id];
+  }
+});
+
+// Identify self
+playerId = sockit.getSocket().id;
+players[playerId] = new THREE.Mesh(playerGeometry, playerMaterial.clone());
+players[playerId].material.color.setHex(0x0000ff);
+scene.add(players[playerId]);
+
+// --- Multiplayer Sync ---
+sockit.getSocket().on('move', ({id, pos}) => {
+  if(players[id]) players[id].position.set(pos.x, pos.y, pos.z);
+});
+
+sockit.getSocket().on('shoot', ({id, pos, dir}) => {
+  createBullet(new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Vector3(dir.x, dir.y, dir.z));
+});
+
+// --- Bullets ---
+const bullets = [];
+function createBullet(pos, dir) {
+  const geo = new THREE.SphereGeometry(0.1, 8, 8);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+  const bullet = new THREE.Mesh(geo, mat);
+  bullet.position.copy(pos);
+  bullet.userData.dir = dir.clone().normalize().multiplyScalar(0.5);
+  scene.add(bullet);
+  bullets.push(bullet);
+}
+
+// --- Animate ---
+function animate() {
+  requestAnimationFrame(animate);
+
+  // Player movement
+  const speed = 0.1;
+  if(keys['w']) players[playerId].position.z -= speed;
+  if(keys['s']) players[playerId].position.z += speed;
+  if(keys['a']) players[playerId].position.x -= speed;
+  if(keys['d']) players[playerId].position.x += speed;
+
+  // Send position to other clients
+  sockit.send('move', { id: playerId, pos: players[playerId].position });
+
+  // Update bullets
+  bullets.forEach((b, i) => {
+    b.position.add(b.userData.dir);
+    if(Math.abs(b.position.x) > 50 || Math.abs(b.position.z) > 50) {
+      scene.remove(b);
+      bullets.splice(i, 1);
+    }
+  });
+
+  camera.position.x = players[playerId].position.x;
+  camera.position.z = players[playerId].position.z + 5;
+  camera.lookAt(players[playerId].position);
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// --- Shooting ---
+document.addEventListener('click', () => {
+  const dir = new THREE.Vector3(0, 0, -1);
+  createBullet(players[playerId].position.clone(), dir);
+  sockit.send('shoot', { id: playerId, pos: players[playerId].position, dir });
+});
+
+</script>
 </body>
 </html>
